@@ -9,14 +9,14 @@ class GLaDOSChecker:
     API_BASE = "https://glados.rocks/api/user"
     CHECKIN_URL = f"{API_BASE}/checkin"
     STATUS_URL = f"{API_BASE}/status"
-    
+
     def __init__(self):
         self._validate_env()
         self.email = os.environ["GLADOS_EMAIL"]
         self.cookie = os.environ["GLADOS_COOKIE"]
         self.bot_token = os.environ["TG_BOT_TOKEN"]
         self.chat_id = os.environ["TG_CHAT_ID"]
-        
+
     def _validate_env(self):
         required = {"GLADOS_EMAIL", "GLADOS_COOKIE", "TG_BOT_TOKEN", "TG_CHAT_ID"}
         missing = required - set(os.environ)
@@ -59,6 +59,29 @@ class GLaDOSChecker:
         except Exception as e:
             return False, f"状态查询失败: {str(e)} ❌"
 
+    @staticmethod
+    def _extract_current_balance(data: dict) -> Optional[str]:
+        records = data.get("list", [])
+        if not isinstance(records, list) or not records:
+            return None
+
+        latest_record = max(
+            (item for item in records if isinstance(item, dict)),
+            key=lambda item: item.get("time", 0),
+            default=None
+        )
+        if not latest_record:
+            return None
+
+        balance = latest_record.get("balance")
+        if balance is None:
+            return None
+
+        balance_str = str(balance)
+        if "." in balance_str:
+            balance_str = balance_str.rstrip("0").rstrip(".")
+        return balance_str
+
     def perform_checkin(self) -> Tuple[bool, str]:
         try:
             resp = requests.post(
@@ -69,7 +92,11 @@ class GLaDOSChecker:
             )
             resp.raise_for_status()
             data = self._parse_response(resp)
-            return self._handle_checkin_result(data.get("message", ""))
+            success, result = self._handle_checkin_result(data.get("message", ""))
+            current_balance = self._extract_current_balance(data)
+            if current_balance:
+                result = f"{result}，当前积分: {current_balance} 🎉"
+            return success, result
         except Exception as e:
             return False, f"签到失败: {str(e)} ❌"
 
@@ -78,7 +105,7 @@ class GLaDOSChecker:
             return False, "请明天再试 ⏳"
         if "Got" in msg:
             points = msg.split("Got ")[1].split(" ")[0]
-            return True, f"获得 {points} 积分 🎉"
+            return True, f"获得 {points} 积分"
         return False, f"未知响应: {msg} ❓"
 
     def send_notification(self, status: str, checkin_result: str):
@@ -89,7 +116,7 @@ class GLaDOSChecker:
             f"📊 账户状态: {status}\n\n"
             "✅ 任务执行完成"
         )
-        
+
         try:
             resp = requests.post(
                 f"https://api.telegram.org/bot{self.bot_token}/sendMessage",
@@ -107,10 +134,10 @@ class GLaDOSChecker:
     def execute(self):
         print(f"🔍 开始处理账户: {self.email}")
         time.sleep(random.uniform(1, 3))
-        
+
         success, checkin_result = self.perform_checkin()
         _, status_result = self.check_status()
-        
+
         self.send_notification(status_result, checkin_result)
         print("🏁 流程执行完毕")
 
