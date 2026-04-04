@@ -16,6 +16,7 @@ class GLaDOSChecker:
         self.cookie = os.environ["GLADOS_COOKIE"]
         self.bot_token = os.environ["TG_BOT_TOKEN"]
         self.chat_id = os.environ["TG_CHAT_ID"]
+        self.current_balance = None
 
     def _validate_env(self):
         required = {"GLADOS_EMAIL", "GLADOS_COOKIE", "TG_BOT_TOKEN", "TG_CHAT_ID"}
@@ -55,7 +56,7 @@ class GLaDOSChecker:
             resp.raise_for_status()
             data = self._parse_response(resp)
             days = float(data.get("data", {}).get("leftDays", 0))
-            return True, f"剩余天数: {days:.1f} 🗓️"
+            return True, f"剩余 {int(days)} 天 🗓️"
         except Exception as e:
             return False, f"状态查询失败: {str(e)} ❌"
 
@@ -94,8 +95,7 @@ class GLaDOSChecker:
             data = self._parse_response(resp)
             success, result = self._handle_checkin_result(data.get("message", ""))
             current_balance = self._extract_current_balance(data)
-            if current_balance:
-                result = f"{result}，当前积分: {current_balance} 🎉"
+            self.current_balance = current_balance
             return success, result
         except Exception as e:
             return False, f"签到失败: {str(e)} ❌"
@@ -105,15 +105,16 @@ class GLaDOSChecker:
             return False, "请明天再试 ⏳"
         if "Got" in msg:
             points = msg.split("Got ")[1].split(" ")[0]
-            return True, f"获得 {points} 积分"
+            return True, f"获得 {points} 积分 🎉"
         return False, f"未知响应: {msg} ❓"
 
     def send_notification(self, status: str, checkin_result: str):
+        balance_text = self.current_balance if self.current_balance else "未知"
         message = (
-            f"🕒 北京时间: {self._current_time()}\n"
-            f"📧 账户: {self.email}\n\n"
-            f"🔔 签到结果: {checkin_result}\n"
-            f"📊 账户状态: {status}\n\n"
+            f"🕒 {self._current_time()}\n\n"
+            # f"📧 账户: {self.email}\n\n"
+            f"🔔 {checkin_result}\n"
+            f"📊 当前 {balance_text} 积分，{status}\n\n"
             "✅ 任务执行完成"
         )
 
