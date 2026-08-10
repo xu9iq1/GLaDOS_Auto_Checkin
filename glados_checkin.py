@@ -6,7 +6,7 @@ import datetime
 from typing import Tuple, Optional
 
 class GLaDOSChecker:
-    API_BASE = "https://glados.rocks/api/user"
+    API_BASE = "https://glados.cloud/api/user"
     CHECKIN_URL = f"{API_BASE}/checkin"
     STATUS_URL = f"{API_BASE}/status"
 
@@ -46,6 +46,21 @@ class GLaDOSChecker:
         except ValueError:
             return {"message": f"Invalid JSON: {response.text[:50]}"}
 
+    @staticmethod
+    def _calculate_expiry_date(data: dict) -> Optional[str]:
+        system_date = data.get("data", {}).get("system_date")
+        left_days = data.get("data", {}).get("leftDays")
+
+        if not system_date or left_days is None:
+            return None
+
+        try:
+            base_time = datetime.datetime.fromisoformat(system_date.replace("Z", "+00:00"))
+            expiry_date = (base_time + datetime.timedelta(days=float(left_days))).date()
+            return expiry_date.strftime("%Y-%m-%d")
+        except (ValueError, TypeError):
+            return None
+
     def check_status(self) -> Tuple[bool, str]:
         try:
             resp = requests.get(
@@ -55,8 +70,11 @@ class GLaDOSChecker:
             )
             resp.raise_for_status()
             data = self._parse_response(resp)
+            expiry_date = self._calculate_expiry_date(data)
+            if expiry_date:
+                return True, f"{expiry_date} 到期"
             days = float(data.get("data", {}).get("leftDays", 0))
-            return True, f"剩余 {int(days)} 天 🗓️"
+            return True, f"到期未知，剩余 {int(days)} 天"
         except Exception as e:
             return False, f"状态查询失败: {str(e)} ❌"
 
@@ -114,7 +132,8 @@ class GLaDOSChecker:
             f"🕒 {self._current_time()}\n\n"
             # f"📧 账户: {self.email}\n\n"
             f"🔔 {checkin_result}\n"
-            f"📊 当前 {balance_text} 积分，{status}\n\n"
+            f"📊 当前 {balance_text} 积分\n"
+            f"🗓️ {status}\n\n"
             "✅ 任务执行完成"
         )
 
