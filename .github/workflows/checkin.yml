@@ -8,7 +8,6 @@ on:
 jobs:
   auto-checkin:
     runs-on: ubuntu-latest
-    environment: production
 
     steps:
     - name: Checkout code
@@ -28,6 +27,7 @@ jobs:
         GLADOS_COOKIE: ${{ secrets.GLADOS_COOKIE }}
         TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
         TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        GLADOS_USER_AGENT: ${{ secrets.GLADOS_USER_AGENT }}
       run: python glados_checkin.py
 
   keepalive-workflow:
