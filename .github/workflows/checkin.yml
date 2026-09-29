@@ -28,6 +28,7 @@ jobs:
         TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
         TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         GLADOS_USER_AGENT: ${{ secrets.GLADOS_USER_AGENT }}
+        GLADOS_EXCHANGE_POINTS: ${{ secrets.GLADOS_EXCHANGE_POINTS }}
       run: python glados_checkin.py
 
   keepalive-workflow:

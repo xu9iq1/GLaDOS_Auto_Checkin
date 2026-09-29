@@ -11,6 +11,15 @@ class GLaDOSChecker:
     API_BASE = f"https://{DOMAIN}/api/user"
     CHECKIN_URL = f"{API_BASE}/checkin"
     STATUS_URL = f"{API_BASE}/status"
+    POINTS_URL = f"{API_BASE}/points"
+    EXCHANGE_URL = f"{API_BASE}/exchange"
+
+    # 官方支持的积分兑换: 100分=10天, 200分=30天, 500分=100天 (仅识别纯数字积分)
+    EXCHANGE_POINTS = {
+        "100": (100, "10天"),
+        "200": (200, "30天"),
+        "500": (500, "100天"),
+    }
 
     # 默认 User-Agent（与登录浏览器保持一致）
     DEFAULT_UA = (
@@ -32,6 +41,12 @@ class GLaDOSChecker:
         self.current_balance = None
         self.checkin_code: Optional[int] = None
         self.session = requests.Session()
+
+        # 积分兑换配置：默认不开启，仅在显式配置纯数字 100 / 200 / 500 时开启
+        env_points = os.environ.get("GLADOS_EXCHANGE_POINTS", "").strip()
+        self.exchange_points_info = self.EXCHANGE_POINTS.get(env_points)
+        if env_points and not self.exchange_points_info:
+            print(f"⚠️ 环境变量 GLADOS_EXCHANGE_POINTS='{env_points}' 无效，仅支持纯数字：100, 200, 500。将跳过自动兑换。")
 
     def _validate_env(self):
         required = {"GLADOS_EMAIL", "GLADOS_COOKIE", "TG_BOT_TOKEN", "TG_CHAT_ID"}
@@ -184,7 +199,74 @@ class GLaDOSChecker:
 
         return False, f"未知响应: {msg} ❓ (Code: {code})"
 
-    def send_notification(self, status: str, checkin_result: str):
+    def check_points(self) -> Optional[int]:
+        """查询用户当前总积分"""
+        try:
+            resp = self.session.get(
+                self.POINTS_URL,
+                headers=self._gen_headers(is_post=False),
+                timeout=15
+            )
+            resp.raise_for_status()
+            data = self._parse_response(resp)
+            points = data.get("points")
+            if points is not None:
+                pts_int = int(float(points))
+                self.current_balance = str(pts_int)
+                return pts_int
+            return None
+        except Exception as e:
+            print(f"⚠️ 查询积分失败: {e}")
+            return None
+
+    def perform_exchange(self, current_points: Optional[int]) -> Optional[str]:
+        """执行积分自动兑换（如果已配置）"""
+        if not self.exchange_points_info:
+            return None
+
+        required_points, days_desc = self.exchange_points_info
+
+        # 优先使用实时查询到的 points，缺失时尝试回退解析 current_balance
+        pts = current_points
+        if pts is None and self.current_balance:
+            try:
+                pts = int(float(self.current_balance))
+            except (ValueError, TypeError):
+                pass
+
+        if pts is None:
+            print("⚠️ 无法获取当前总积分，跳过自动兑换")
+            return None
+
+        # 积分未达到门槛时直接返回 None，日常通知不显示兑换信息，亦不发起多余请求
+        if pts < required_points:
+            print(f"ℹ️ 积分未达兑换门槛: 当前 {pts} 积分，需 {required_points} 积分，跳过兑换")
+            return None
+
+        try:
+            print(f"🎁 开始自动兑换: 消耗 {required_points} 积分，兑换 {days_desc}")
+            body = self._serialize_post_body({"planType": f"plan{required_points}"})
+            resp = self.session.post(
+                self.EXCHANGE_URL,
+                headers=self._gen_headers(is_post=True),
+                data=body,
+                timeout=15
+            )
+            resp.raise_for_status()
+            data = self._parse_response(resp)
+            code = data.get("code")
+            msg = data.get("message", "")
+            if code == 0:
+                print(f"🎉 兑换成功: 消耗 {required_points} 积分兑换 {days_desc}")
+                return f"消耗 {required_points} 积分兑换 {days_desc} 🎉"
+            else:
+                print(f"⚠️ 兑换未成功: {msg}")
+                return None
+        except Exception as e:
+            print(f"⚠️ 兑换请求异常: {e}")
+            return None
+
+    def send_notification(self, status: str, checkin_result: str, exchange_result: Optional[str] = None):
         balance_text = self.current_balance if self.current_balance else "未知"
 
         # 根据响应码展示醒目的总结状态
@@ -199,13 +281,20 @@ class GLaDOSChecker:
         else:
             summary_status = "⚠️ 任务完成 (签到未成功)"
 
-        message = (
-            f"🕒 {self._current_time()}\n\n"
-            f"🔔 {checkin_result}\n"
-            f"📊 当前 {balance_text} 积分\n"
-            f"🗓️ {status}\n\n"
-            f"{summary_status}"
-        )
+        lines = [
+            f"🕒 {self._current_time()}",
+            "",
+            f"🔔 {checkin_result}",
+            f"📊 当前 {balance_text} 积分",
+            f"🗓️ {status}",
+        ]
+        # 仅在当天积分达标并实际完成兑换时展示兑换详情
+        if exchange_result:
+            lines.append(f"🎁 {exchange_result}")
+        lines.append("")
+        lines.append(f"{summary_status}")
+
+        message = "\n".join(lines)
 
         try:
             resp = requests.post(
@@ -228,12 +317,30 @@ class GLaDOSChecker:
         else:
             print("ℹ️ 未设置 GLADOS_USER_AGENT，使用默认 UA (若被检测请设置为当初登录浏览器的 navigator.userAgent)")
 
+        if self.exchange_points_info:
+            target_pts, days = self.exchange_points_info
+            print(f"ℹ️ 已配置自动兑换策略: 满 {target_pts} 积分自动兑换 {days}")
+        else:
+            print("ℹ️ 未配置自动兑换策略 (GLADOS_EXCHANGE_POINTS)，跳过自动兑换")
+
         time.sleep(random.uniform(1, 3))
 
+        # 1. 执行签到
         success, checkin_result = self.perform_checkin()
+
+        # 2. 仅在认证有效时查询最新总积分并尝试兑换
+        exchange_result = None
+        if self.checkin_code in (0, 1):
+            current_pts = self.check_points()
+            exchange_result = self.perform_exchange(current_pts)
+            if exchange_result:
+                self.check_points()  # 兑换成功后重新查询扣除后的最新总积分
+
+        # 3. 查询账号有效期与状态（兑换成功后会反映最新到期时间）
         _, status_result = self.check_status()
 
-        self.send_notification(status_result, checkin_result)
+        # 4. 发送 Telegram 通知
+        self.send_notification(status_result, checkin_result, exchange_result)
         print("🏁 流程执行完毕")
 
 if __name__ == "__main__":
