@@ -5,6 +5,7 @@ import time
 import requests
 import datetime
 from typing import Tuple, Optional
+from checkin_challenge import obtain_checkin_payload
 
 class GLaDOSChecker:
     DOMAIN = "glados.cloud"
@@ -148,7 +149,13 @@ class GLaDOSChecker:
 
     def perform_checkin(self) -> Tuple[bool, str]:
         try:
-            body = self._serialize_post_body({"token": self.DOMAIN})
+            payload, challenge_err = obtain_checkin_payload(
+                self.session, self.DOMAIN, self._gen_headers(is_post=False)
+            )
+            if challenge_err:
+                return False, f"{challenge_err} ❌"
+
+            body = self._serialize_post_body(payload)
             resp = self.session.post(
                 self.CHECKIN_URL,
                 headers=self._gen_headers(is_post=True),
